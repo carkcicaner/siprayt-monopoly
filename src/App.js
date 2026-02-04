@@ -45,7 +45,6 @@ import {
 } from 'lucide-react';
 
 // --- FIREBASE CONFIG & INIT ---
-// Vercel build hatasını engellemek için global değişkenleri güvenli şekilde kontrol ediyoruz
 const firebaseConfig = typeof window !== 'undefined' && typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : {
@@ -61,7 +60,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Rule 1 Compliance: appId documentation IDs cannot contain slashes.
 const rawAppId = typeof window !== 'undefined' && typeof __app_id !== 'undefined' ? __app_id : 'siprayt-monopoly';
 const appId = rawAppId.replace(/\//g, '_');
 
@@ -70,7 +68,6 @@ const INITIAL_BANK_BALANCE = 50000000;
 const INITIAL_PLAYER_BALANCE = 150000; 
 const GO_SALARY = 20000; 
 
-// GÖRSELLER
 const IMAGES = {
   logo: 'https://i.ibb.co/3yjXmptX/arayuz-ekrani.png'
 };
@@ -94,7 +91,6 @@ const SOUNDS = {
   fail: 'https://assets.mixkit.co/active_storage/sfx/2572/2572-preview.mp3' 
 };
 
-// --- PİYON LİSTESİ ---
 const GAME_TOKENS = [
   { id: 'cat', label: 'Kedi', icon: <Cat className="w-6 h-6" />, img: 'https://i.ibb.co/BDXR3SS/kedi.png' },
   { id: 'shoe', label: 'Ayakkabı', icon: <span className="text-2xl">👢</span>, img: 'https://i.ibb.co/C32qGbH0/ayakkabi.png' },
@@ -132,7 +128,7 @@ export default function App() {
           await signInAnonymously(auth);
         }
       } catch (err) {
-        console.error("Auth initialization error:", err);
+        console.error("Auth init error:", err);
       }
       setAuthReady(true);
     };
@@ -157,8 +153,6 @@ export default function App() {
             }
           }
         }
-      }, (error) => {
-        console.error("Firestore sync error:", error);
       });
       return () => unsub();
     }
@@ -176,46 +170,44 @@ export default function App() {
   const calculateDebt = (principal, startTurn, currentTurn) => {
     if (principal <= 0) return 0;
     const turnsPassed = currentTurn - startTurn;
-    let interestRate = 0;
-    if (turnsPassed >= 2) {
-      interestRate = (turnsPassed - 1) * 25;
-    }
+    let interestRate = turnsPassed >= 2 ? (turnsPassed - 1) * 25 : 0;
     return Math.floor(principal + (principal * interestRate / 100));
   };
 
-  const createGame = async (hostName, token) => {
+  const createGame = async (hostName, token, isBankerOnly) => {
     if (!auth.currentUser) return;
     const newCode = Math.floor(1000 + Math.random() * 9000).toString();
+    
     const hostPlayer = {
       id: Date.now(),
       name: hostName,
-      balance: INITIAL_PLAYER_BALANCE,
+      balance: isBankerOnly ? 0 : INITIAL_PLAYER_BALANCE,
       turn: 1, 
       savings: 0,
       savingsStartTurn: 0,
       debt: 0,
       debtLenderId: null, 
       debtStartTurn: 0,
-      token: token,
-      isHost: true
+      token: isBankerOnly ? null : token,
+      isHost: true,
+      isBankerOnly: isBankerOnly
     };
 
     const initialGameState = {
       code: newCode,
-      bankBalance: INITIAL_BANK_BALANCE - INITIAL_PLAYER_BALANCE,
+      bankBalance: INITIAL_BANK_BALANCE - (isBankerOnly ? 0 : INITIAL_PLAYER_BALANCE),
       players: [hostPlayer],
       transactions: [{
         id: Date.now(),
         from: 'SİSTEM',
-        to: 'HERKES',
+        to: hostName,
         amount: 0,
-        type: 'OYUN KURULDU',
+        type: isBankerOnly ? 'BANKACI OLARAK KURULDU' : 'OYUNCU+BANKACI KURULDU',
         time: getCurrentTime()
       }]
     };
 
     await setDoc(getGameDoc(newCode), initialGameState);
-    
     setUser(hostPlayer);
     setGameState(initialGameState);
     setView('game');
@@ -253,7 +245,8 @@ export default function App() {
         debtLenderId: null,
         debtStartTurn: 0,
         token: token,
-        isHost: false
+        isHost: false,
+        isBankerOnly: false
       };
 
       await updateDoc(gameRef, {
@@ -347,7 +340,7 @@ export default function App() {
     });
 
     playSound('turn');
-    showNotification(`${player.name} maaş aldı ve yeni tura geçti!`, 'success');
+    showNotification(`${player.name} maaş aldı!`, 'success');
   };
 
   const handleLoan = async (lenderId, borrowerId, amount) => {
@@ -369,7 +362,7 @@ export default function App() {
     if (lenderId !== 'BANKA') {
         const lender = newPlayers.find(p => p.id === lenderId);
         if (lender.balance < amountNum) {
-            return showNotification('Bakiyeniz yetersiz!', 'error');
+            return showNotification('Bakiye yetersiz!', 'error');
         }
         lender.balance -= amountNum;
         lenderName = lender.name;
@@ -387,15 +380,15 @@ export default function App() {
       players: newPlayers,
       transactions: [{
           id: Date.now(),
-          from: `${lenderName} (KREDİ)`,
+          from: `${lenderName} (BORÇ)`,
           to: borrower.name,
           amount: amountNum,
-          type: 'BORÇ VERİLDİ',
+          type: 'KREDİ VERİLDİ',
           time: getCurrentTime()
       }, ...gameState.transactions]
     });
 
-    showNotification(`${lenderName} kredisi onaylandı.`, 'success');
+    showNotification(`İşlem Onaylandı.`, 'success');
     playSound('receive');
   };
 
@@ -408,7 +401,7 @@ export default function App() {
 
     if (player.balance < currentDebt) {
         playSound('alarm');
-        return showNotification('Borcu ödemek için paranız yetersiz!', 'error');
+        return showNotification('Para yetersiz!', 'error');
     }
 
     let receiverName = 'BANKA';
@@ -444,7 +437,7 @@ export default function App() {
       }, ...gameState.transactions]
     });
 
-    showNotification('Borç faiziyle kapatıldı.', 'success');
+    showNotification('Borç kapatıldı.', 'success');
     playSound('send');
   };
 
@@ -483,7 +476,7 @@ export default function App() {
             from: bankruptPlayer.name,
             to: beneficiaryName,
             amount: totalAssets,
-            type: 'İFLAS / AYRILDI',
+            type: 'İFLAS',
             time: getCurrentTime()
         }, ...gameState.transactions]
     });
@@ -504,24 +497,18 @@ export default function App() {
       player.balance -= amountNum;
       player.savings += amountNum;
       player.savingsStartTurn = player.turn; 
-      showNotification('Vadeli hesaba yatırıldı.', 'success');
+      showNotification('Birikim başladı.', 'success');
     } 
     else if (action === 'WITHDRAW') {
       if (player.savings <= 0) return;
-
       const turnsPassed = player.turn - player.savingsStartTurn;
       let interestRate = (turnsPassed >= 5 && turnsPassed % 5 === 0) ? Math.min(Math.floor(turnsPassed / 5) * 10, 100) : 0;
-
       const interestAmount = Math.floor(player.savings * (interestRate / 100));
-      const totalPayout = player.savings + interestAmount;
-
-      player.balance += totalPayout;
+      player.balance += (player.savings + interestAmount);
       player.savings = 0;
       player.savingsStartTurn = 0;
       newBankBalance -= interestAmount;
-
       playSound('receive');
-      showNotification(interestAmount > 0 ? `Vade doldu! %${interestRate} kazançla çekildi.` : 'Erken çekim! Faiz yandı.', interestAmount > 0 ? 'success' : 'error');
     }
 
     await updateDoc(gameRef, {
@@ -536,7 +523,7 @@ export default function App() {
   };
 
   const resetGame = async () => {
-    if (window.confirm('Oyun sıfırlanacak. Emin misiniz?')) {
+    if (window.confirm('Oyun tamamen sıfırlanacak. Emin misiniz?')) {
       await deleteDoc(getGameDoc(gameState.code));
       setUser(null);
       setGameState({ code: '', bankBalance: INITIAL_BANK_BALANCE, players: [], transactions: [] });
@@ -550,7 +537,7 @@ export default function App() {
   if (!authReady) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="text-teal-500 font-bold animate-pulse uppercase tracking-[0.3em]">Sistem Yükleniyor...</div>
+        <div className="text-teal-500 font-bold animate-pulse uppercase tracking-[0.3em]">Sistem Hazırlanıyor...</div>
       </div>
     );
   }
@@ -597,12 +584,10 @@ function WelcomeScreen({ onCreateGame, onJoinGame, existingGame }) {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [selectedToken, setSelectedToken] = useState(null);
+  const [hostRole, setHostRole] = useState('both'); 
 
   const reset = () => {
-    setMode('menu');
-    setName('');
-    setCode('');
-    setSelectedToken(null);
+    setMode('menu'); setName(''); setCode(''); setSelectedToken(null);
   };
 
   const TokenSelector = () => (
@@ -614,7 +599,7 @@ function WelcomeScreen({ onCreateGame, onJoinGame, existingGame }) {
           onClick={() => setSelectedToken(token.id)}
           className={`aspect-square flex flex-col items-center justify-center rounded-xl border transition-all relative overflow-hidden bg-slate-800 ${
             selectedToken === token.id 
-              ? 'border-teal-400 ring-2 ring-teal-500/50 scale-105 z-10 shadow-lg' 
+              ? 'border-teal-400 ring-2 ring-teal-500/50 transform scale-105 z-10 shadow-lg' 
               : 'border-slate-700 opacity-80 hover:opacity-100 hover:border-slate-500'
           }`}
         >
@@ -633,13 +618,14 @@ function WelcomeScreen({ onCreateGame, onJoinGame, existingGame }) {
   return (
     <div className="flex flex-col items-center min-h-screen relative overflow-y-auto pb-10 bg-slate-950">
       
+      {/* HEADER LOGO/TITLE SECTION - TAMAMEN ORİJİNAL TASARIM */}
       <div className="w-full flex flex-col items-center justify-center mt-12 mb-8 px-6 text-center space-y-4 animate-in fade-in slide-in-from-top-10 duration-700">
         <div className="w-24 h-24 bg-gradient-to-tr from-teal-500 to-emerald-600 rounded-3xl flex items-center justify-center shadow-2xl rotate-6 border-2 border-slate-700/50">
             <Sparkles className="w-12 h-12 text-white" />
         </div>
         
         <div>
-            <h2 className="text-xl font-medium text-slate-400 tracking-wide italic">Herkeşe Benden</h2>
+            <h2 className="text-xl font-medium text-slate-400 tracking-wide font-serif italic">Herkeşe Benden</h2>
             <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-teal-400 via-emerald-400 to-cyan-400 tracking-tighter drop-shadow-sm my-1 font-black">
                 ŞIPRAYT
             </h1>
@@ -658,76 +644,119 @@ function WelcomeScreen({ onCreateGame, onJoinGame, existingGame }) {
             {existingGame && (
               <div className="bg-slate-900/80 p-4 rounded-2xl text-center border border-teal-500/30 mb-6 shadow-lg backdrop-blur-sm">
                 <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block mb-1">Mevcut Oyun</span>
-                <div className="font-mono text-teal-400 font-black tracking-widest text-3xl">{existingGame}</div>
-                <div className="text-[10px] text-slate-500 mt-1">Giriş yapıp kodunuzu yazarak devam edin</div>
+                <div className="font-mono text-teal-400 font-black tracking-widest text-3xl font-mono">{existingGame}</div>
+                <div className="text-[10px] text-slate-500 mt-1">Devam etmek için "Katıl" diyip kodunuzu girin</div>
               </div>
             )}
 
             <button 
-              type="button"
               onClick={() => setMode('create')}
               className="w-full bg-slate-900 border border-slate-800 p-6 rounded-3xl flex flex-col items-center gap-3 transition-all active:scale-95 shadow-xl hover:bg-slate-800"
             >
               <div className="p-4 bg-teal-500/10 rounded-full text-teal-400">
                 <PlusCircle className="w-8 h-8" />
               </div>
-              <div className="text-center font-bold text-lg text-white uppercase tracking-widest">Yeni Oyun Kur</div>
+              <div className="text-center font-bold text-lg text-white">Yeni Oyun Kur</div>
             </button>
 
             <button 
-              type="button"
               onClick={() => setMode('join')}
               className="w-full bg-slate-900 border border-slate-800 p-6 rounded-3xl flex flex-col items-center gap-3 transition-all active:scale-95 shadow-xl hover:bg-slate-800"
             >
               <div className="p-4 bg-fuchsia-500/10 rounded-full text-fuchsia-400">
                 <LogIn className="w-8 h-8" />
               </div>
-              <div className="text-center font-bold text-lg text-white uppercase tracking-widest">Oyuna Katıl</div>
+              <div className="text-center font-bold text-lg text-white">Oyuna Katıl</div>
             </button>
           </div>
         )}
 
-        {(mode === 'create' || mode === 'join') && (
+        {mode === 'create' && (
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl animate-in zoom-in-95 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center mb-2">
+                <h3 className="text-white font-bold text-xl font-black">Oyun Kurucu Ayarları</h3>
+                <button onClick={reset} className="text-slate-500 hover:text-white">
+                    <XCircle className="w-6 h-6" />
+                </button>
+            </div>
+
+            <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex gap-1">
+                <button 
+                  onClick={() => setHostRole('banker')} 
+                  className={`flex-1 py-2.5 text-[9px] font-black rounded-lg transition-all uppercase tracking-widest ${hostRole==='banker'?'bg-slate-800 text-white shadow-lg border border-slate-700':'text-slate-600'}`}
+                >
+                  Sadece Bankacı
+                </button>
+                <button 
+                  onClick={() => setHostRole('both')} 
+                  className={`flex-1 py-2.5 text-[9px] font-black rounded-lg transition-all uppercase tracking-widest ${hostRole==='both'?'bg-slate-800 text-white shadow-lg border border-slate-700':'text-slate-600'}`}
+                >
+                  Oyuncu + Bankacı
+                </button>
+             </div>
+            
+            <div className="mb-4">
+                <label className="text-[10px] text-slate-500 font-bold ml-1 mb-1 block uppercase">İsminiz</label>
+                <input 
+                  type="text" value={name} onChange={e => setName(e.target.value)}
+                  placeholder="İsim giriniz..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-teal-500 outline-none transition-colors"
+                />
+            </div>
+            
+            {hostRole === 'both' && (
+              <div className="animate-in slide-in-from-top-2">
+                <label className="text-[10px] text-slate-500 font-bold mb-2 block ml-1 uppercase">Piyonunu Seç</label>
+                <TokenSelector />
+              </div>
+            )}
+            
+            <button 
+              onClick={() => onCreateGame(name, selectedToken, hostRole==='banker')}
+              disabled={!name || (hostRole==='both' && !selectedToken)}
+              className="w-full bg-teal-600 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 disabled:opacity-50 uppercase tracking-widest"
+            >
+              BAŞLAT
+            </button>
+          </div>
+        )}
+
+        {mode === 'join' && (
           <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl animate-in zoom-in-95 shadow-2xl">
             <div className="flex justify-between items-center mb-6">
-                <h3 className="text-white font-bold text-xl uppercase tracking-tighter font-bold">{mode === 'create' ? 'Oyun Kurucu' : 'Katılımcı'}</h3>
-                <button type="button" onClick={reset} className="text-slate-500 hover:text-white">
+                <h3 className="text-white font-bold text-xl font-black">Oyuna Katıl</h3>
+                <button onClick={reset} className="text-slate-500 hover:text-white">
                     <XCircle className="w-6 h-6" />
                 </button>
             </div>
             
-            {mode === 'join' && (
-              <div className="mb-4">
+            <div className="mb-4">
                 <label className="text-[10px] text-slate-500 font-bold ml-1 mb-1 block uppercase">Oyun Kodu</label>
                 <input 
                   type="number" value={code} onChange={e => setCode(e.target.value)}
                   placeholder="1234" maxLength={4}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-4 text-white font-mono tracking-widest text-center focus:border-fuchsia-500 outline-none text-2xl font-bold transition-colors font-mono"
                 />
-              </div>
-            )}
+            </div>
             
             <div className="mb-6">
-                <label className="text-[10px] text-slate-500 font-bold ml-1 mb-1 block uppercase">Oyuncu Adı</label>
+                <label className="text-[10px] text-slate-500 font-bold ml-1 mb-1 block uppercase">İsminiz</label>
                 <input 
                   type="text" value={name} onChange={e => setName(e.target.value)}
-                  placeholder="İsminiz..."
+                  placeholder="İsim giriniz..."
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-teal-500 outline-none transition-colors"
                 />
             </div>
             
-            <label className="text-[10px] text-slate-500 font-bold mb-2 block ml-1 uppercase tracking-widest">Piyon Seçimi</label>
+            <label className="text-[10px] text-slate-500 font-bold mb-2 block ml-1 uppercase">Piyonunu Seç</label>
             <TokenSelector />
             
             <button 
-              type="button"
-              onClick={() => mode === 'create' ? onCreateGame(name, selectedToken) : onJoinGame(code, name, selectedToken)}
-              disabled={!name || !selectedToken || (mode === 'join' && code.length < 4)}
-              className={`w-full text-white font-bold py-4 rounded-2xl disabled:opacity-50 mt-2 shadow-lg active:scale-95 text-lg uppercase tracking-widest font-bold ${
-                mode === 'create' ? 'bg-gradient-to-r from-teal-600 to-emerald-500' : 'bg-gradient-to-r from-fuchsia-600 to-purple-500'
-              }`}
+              onClick={() => onJoinGame(code, name, selectedToken)}
+              disabled={!name || !selectedToken || code.length < 4}
+              className="w-full bg-fuchsia-600 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest"
             >
-              {mode === 'create' ? 'BAŞLAT' : 'GİRİŞ YAP'}
+              GİRİŞ YAP
             </button>
           </div>
         )}
@@ -737,50 +766,57 @@ function WelcomeScreen({ onCreateGame, onJoinGame, existingGame }) {
 }
 
 function MainGameInterface(props) {
-  const { user, gameState, handleTransaction, handleSalary, handleSavings, handleLoan, handleBankruptcy, payDebt, onReset, soundEnabled, toggleSound, calculateDebt } = props;
-  const [activeTab, setActiveTab] = useState('wallet'); 
+  const { user, gameState, handleTransaction, handleSalary, handleSavings, handleLoan, handleBankruptcy, payDebt, onLogout, onReset, soundEnabled, toggleSound, calculateDebt } = props;
+  const [activeTab, setActiveTab] = useState(user?.isBankerOnly ? 'bank' : 'wallet'); 
 
   const tabs = [];
   if (user?.isHost) tabs.push({ id: 'bank', label: 'BANKA', icon: <ShieldAlert className="w-6 h-6" />, highlight: true });
-  tabs.push({ id: 'wallet', label: 'Cüzdan', icon: <Wallet className="w-5 h-5" /> }, { id: 'finance', label: 'Finans', icon: <PiggyBank className="w-5 h-5" /> }, { id: 'feed', label: 'Geçmiş', icon: <History className="w-5 h-5" /> });
+  if (!user?.isBankerOnly) {
+    tabs.push({ id: 'wallet', label: 'Cüzdan', icon: <Wallet className="w-5 h-5" /> });
+    tabs.push({ id: 'finance', label: 'Finans', icon: <PiggyBank className="w-5 h-5" /> });
+  }
+  tabs.push({ id: 'feed', label: 'Geçmiş', icon: <History className="w-5 h-5" /> });
 
   return (
     <>
       <div className="sticky top-0 z-50 bg-slate-950/90 backdrop-blur-md border-b border-slate-800 h-16 flex justify-between items-center px-4">
           <div className="flex items-center gap-3">
              <div className="h-10 w-10 rounded-lg overflow-hidden border border-slate-700 shadow-sm"><img src={IMAGES.logo} alt="Logo" className="w-full h-full object-cover" /></div>
-             <div className="flex flex-col"><span className="text-[10px] text-slate-500 font-bold tracking-widest leading-tight uppercase">Kod:</span><button type="button" onClick={() => { window.navigator.clipboard.writeText(gameState.code); }} className="font-mono text-lg font-bold text-white leading-none tracking-widest font-mono font-bold">{gameState.code}</button></div>
+             <div className="flex flex-col"><span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-tight">Kod:</span><button type="button" onClick={() => { window.navigator.clipboard.writeText(gameState.code); }} className="font-mono text-lg font-bold text-white leading-none tracking-widest font-mono">{gameState.code}</button></div>
           </div>
           
           <div className="flex items-center gap-3">
              <button type="button" onClick={toggleSound} className="p-2 bg-slate-900 rounded-full text-slate-400 border border-slate-800 transition-colors">{soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}</button>
-            <div className="w-10 h-10 bg-slate-800 rounded-full border-2 border-slate-700 flex items-center justify-center overflow-hidden relative shadow-md">
-                {(() => {
-                    const token = GAME_TOKENS.find(t => t.id === user?.token);
-                    return token?.img ? <img src={token.img} alt="" className="w-full h-full object-cover" /> : token?.icon;
-                })()}
-                <div className="absolute bottom-0 right-0 bg-teal-600 text-[8px] font-bold px-1 rounded-full border border-slate-900 text-white font-mono">T{user?.turn || 1}</div>
-            </div>
+            {!user?.isBankerOnly && (
+                <div className="w-10 h-10 bg-slate-800 rounded-full border-2 border-slate-700 flex items-center justify-center overflow-hidden relative shadow-md">
+                    {(() => {
+                        const token = GAME_TOKENS.find(t => t.id === user?.token);
+                        return token?.img ? <img src={token.img} alt="" className="w-full h-full object-cover" /> : token?.icon;
+                    })()}
+                    <div className="absolute bottom-0 right-0 bg-teal-600 text-[8px] font-bold px-1 rounded-full border border-slate-900 text-white font-mono">T{user?.turn || 1}</div>
+                </div>
+            )}
+            {user?.isBankerOnly && <div className="bg-amber-500/20 text-amber-500 text-[8px] font-black border border-amber-500/30 px-2 py-1 rounded-lg uppercase tracking-tighter">Bankacı</div>}
             {user?.isHost && <button type="button" onClick={onReset} className="p-2 bg-red-900/20 border border-red-900/50 rounded-full text-red-500"><LogOut className="w-4 h-4" /></button>}
           </div>
       </div>
       
       <div className="bg-slate-900 border-b border-slate-800 py-1.5 px-4 flex justify-between items-center text-xs shadow-inner">
-        <span className="text-slate-400 flex items-center gap-1 font-bold uppercase tracking-wider text-[10px] font-bold"><Landmark className="w-3 h-3" /> Merkez Bankası</span>
-        <span className="font-mono text-teal-400 text-sm font-bold tracking-tighter font-mono">{gameState.bankBalance.toLocaleString()} TL</span>
+        <span className="text-slate-400 flex items-center gap-1 font-bold uppercase tracking-wider text-[10px] font-bold"><Landmark className="w-3 h-3" /> Banka Kasası</span>
+        <span className="font-mono text-teal-400 text-sm font-bold font-mono">{gameState.bankBalance.toLocaleString()} TL</span>
       </div>
 
       <div className="max-w-md mx-auto p-4 space-y-6 min-h-[80vh]">
-        {activeTab === 'wallet' && user && <PlayerWallet user={user} players={gameState.players} onTransaction={handleTransaction} handleBankruptcy={handleBankruptcy} />}
-        {activeTab === 'finance' && user && <FinancePanel user={user} players={gameState.players} currentTurn={user.turn} handleSavings={handleSavings} calculateDebt={calculateDebt} payDebt={payDebt} handleLoan={handleLoan} />}
+        {activeTab === 'wallet' && user && !user.isBankerOnly && <PlayerWallet user={user} players={gameState.players} onTransaction={handleTransaction} handleBankruptcy={handleBankruptcy} />}
+        {activeTab === 'finance' && user && !user.isBankerOnly && <FinancePanel user={user} players={gameState.players} currentTurn={user.turn} handleSavings={handleSavings} calculateDebt={calculateDebt} payDebt={payDebt} handleLoan={handleLoan} />}
         {activeTab === 'bank' && user?.isHost && <BankerControls players={gameState.players} onTransaction={handleTransaction} handleSalary={handleSalary} handleLoan={handleLoan} />}
         {activeTab === 'feed' && <TransactionFeed transactions={gameState.transactions} />}
       </div>
 
-      <div className="fixed bottom-0 left-0 w-full bg-slate-950/95 backdrop-blur-md border-t border-slate-800 pb-safe z-40 h-20">
+      <div className="fixed bottom-0 left-0 w-full bg-slate-950/95 backdrop-blur-md border-t border-slate-800 pb-safe z-40 h-20 shadow-2xl">
         <div className="max-w-md mx-auto flex justify-around p-2 gap-2">
           {tabs.map(tab => (
-            <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all duration-300 ${activeTab === tab.id ? (tab.highlight ? 'text-amber-900 bg-gradient-to-tr from-amber-400 to-yellow-200 shadow-lg -translate-y-2 border-2 border-yellow-100 scale-105' : 'text-white bg-slate-800 border border-slate-600 shadow-inner') : (tab.highlight ? 'text-amber-500 bg-amber-950/30 border border-amber-900/50 opacity-60' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900')}`}>
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all duration-300 ${activeTab === tab.id ? (tab.highlight ? 'text-amber-900 bg-gradient-to-tr from-amber-400 to-yellow-200 shadow-lg -translate-y-2 border-2 border-yellow-100 scale-105' : 'text-white bg-slate-800 border border-slate-600') : (tab.highlight ? 'text-amber-500 bg-amber-950/30 border border-amber-900/50' : 'text-slate-500')}`}>
               {tab.icon}
               <span className="text-[9px] font-bold tracking-widest uppercase">{tab.label}</span>
             </button>
@@ -802,31 +838,31 @@ function PlayerWallet({ user, players, onTransaction, handleBankruptcy }) {
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 pb-20">
-      <div className={`relative overflow-hidden rounded-[2rem] p-8 border shadow-2xl mb-8 bg-slate-900 border-slate-800 ring-1 ring-slate-700/30 text-center`}>
+      <div className={`relative overflow-hidden rounded-[2.5rem] p-8 border shadow-2xl mb-8 bg-slate-900 border-slate-800 text-center ring-1 ring-slate-700/30 shadow-inner`}>
         <div className="absolute top-0 right-0 w-32 h-32 bg-teal-500/5 rounded-full blur-3xl transform translate-x-10 -translate-y-10"></div>
-        <span className="text-slate-500 text-[10px] tracking-[0.25em] mb-3 block font-bold uppercase font-bold">Mevcut Bakiye</span>
-        <div className="text-5xl font-black text-white font-mono tracking-tighter drop-shadow-md font-mono">
+        <span className="text-slate-500 text-[10px] tracking-[0.25em] mb-3 block font-bold uppercase font-black">Nakit Bakiyem</span>
+        <div className="text-5xl font-black text-white font-mono tracking-tighter font-mono font-black">
           {user.balance.toLocaleString()} <span className="text-2xl text-teal-500 font-sans font-medium">TL</span>
         </div>
-        <div className="mt-4 text-[9px] text-slate-600 font-bold uppercase tracking-wider border-t border-slate-800 pt-3 italic font-bold">Ödemeler anında işlenir</div>
+        <div className="mt-4 text-[9px] text-slate-600 font-bold uppercase tracking-wider border-t border-slate-800 pt-3 italic font-bold">Bankacı maaşları anında öder</div>
       </div>
 
       {!mode ? (
         <>
             <div className="grid grid-cols-2 gap-4">
-              <button type="button" onClick={() => setMode('pay_bank')} className="flex flex-col items-center justify-center bg-slate-900 border border-red-900/30 p-8 rounded-[2rem] gap-4 hover:bg-red-950/10 shadow-xl transition-all active:scale-95 group"><div className="p-4 bg-red-500/10 rounded-full text-red-500 border border-red-500/20 group-hover:scale-110 transition-transform"><Landmark size={32} /></div><div className="text-center font-bold text-lg text-red-200 uppercase tracking-widest font-bold">Banka</div></button>
-              <button type="button" onClick={() => setMode('pay_player')} className="flex flex-col items-center justify-center bg-slate-900 border border-fuchsia-900/30 p-8 rounded-[2rem] gap-4 hover:bg-fuchsia-950/10 shadow-xl transition-all active:scale-95 group"><div className="p-4 bg-fuchsia-500/10 rounded-full text-fuchsia-400 border border-fuchsia-500/20 group-hover:scale-110 transition-transform"><Users size={32} /></div><div className="text-center font-bold text-lg text-fuchsia-200 uppercase tracking-widest font-bold">Kira</div></button>
+              <button type="button" onClick={() => setMode('pay_bank')} className="flex flex-col items-center justify-center bg-slate-900 border border-red-900/30 p-8 rounded-[2rem] gap-4 active:scale-95 group shadow-xl"><div className="p-4 bg-red-500/10 rounded-full text-red-500 border border-red-500/20 group-hover:scale-110 transition-transform shadow-inner"><Landmark size={32} /></div><span className="font-bold text-lg text-red-200 uppercase tracking-widest font-black">Banka</span></button>
+              <button type="button" onClick={() => setMode('pay_player')} className="flex flex-col items-center justify-center bg-slate-900 border border-fuchsia-900/30 p-8 rounded-[2rem] gap-4 active:scale-95 group shadow-xl"><div className="p-4 bg-fuchsia-500/10 rounded-full text-fuchsia-500 border border-fuchsia-500/20 group-hover:scale-110 transition-transform shadow-inner"><Users size={32} /></div><span className="font-bold text-lg text-fuchsia-200 uppercase tracking-widest font-black">Kira Öde</span></button>
             </div>
-            <button type="button" onClick={() => setShowBankruptcyModal(true)} className="w-full bg-slate-950 border border-red-900/20 text-red-600/50 py-4 rounded-xl flex items-center justify-center gap-2 mt-12 hover:text-red-500 transition-all font-bold text-xs uppercase tracking-[0.3em] font-bold"><Skull size={16} /> İflas Et</button>
+            <button type="button" onClick={() => setShowBankruptcyModal(true)} className="w-full bg-slate-950 border border-red-900/20 text-red-600/50 py-4 rounded-xl flex items-center justify-center gap-2 mt-12 hover:text-red-500 transition-all font-bold text-xs uppercase tracking-[0.3em] font-black"><Skull size={16} /> İflas Bayrağı Çek</button>
             {showBankruptcyModal && (
-                <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex items-center justify-center p-6"><div className="w-full max-w-sm bg-slate-900 border-2 border-red-600 rounded-3xl p-8 text-center shadow-2xl"><Skull className="w-16 h-16 text-red-600 mx-auto mb-4" /><h2 className="text-3xl font-black text-white mb-2 tracking-tighter uppercase font-black">İflas</h2><p className="text-slate-400 text-sm mb-8 leading-relaxed font-bold">Tüm varlıklarını devredip <strong className="text-red-500">oyundan ayrılacaksınız.</strong></p><select value={beneficiary} onChange={(e) => setBeneficiary(e.target.value)} className="w-full bg-slate-950 border border-slate-700 text-white p-4 rounded-xl mb-6 outline-none focus:border-red-500 font-bold"><option value="">Kime Devredilsin?</option><option value="BANKA">BANKA</option>{players.filter(p => p.id !== user.id).map(p => (<option key={p.id} value={p.id}>{p.name}</option>))}</select><button type="button" onClick={() => beneficiary && handleBankruptcy(user.id, beneficiary)} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 mb-4 uppercase tracking-widest font-bold">Onayla ve Çık</button><button type="button" onClick={() => setShowBankruptcyModal(false)} className="text-slate-500 font-bold uppercase text-xs tracking-widest hover:text-white font-bold">İptal</button></div></div>
+                <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex items-center justify-center p-6"><div className="w-full max-w-sm bg-slate-900 border-2 border-red-600 rounded-3xl p-8 text-center shadow-2xl"><Skull className="w-16 h-16 text-red-600 mx-auto mb-4" /><h2 className="text-3xl font-black text-white mb-2 tracking-tighter uppercase font-black">İFLAS</h2><p className="text-slate-400 text-sm mb-8 leading-relaxed font-bold">Varlıkları devredip oyundan <strong className="text-red-500">kalıcı olarak silineceksiniz.</strong></p><select value={beneficiary} onChange={(e) => setBeneficiary(e.target.value)} className="w-full bg-slate-950 border border-slate-700 text-white p-4 rounded-xl mb-6 outline-none focus:border-red-500 font-bold"><option value="">Varlıkları Kime Devret?</option><option value="BANKA">BANKA</option>{players.filter(p => p.id !== user.id && !p.isBankerOnly).map(p => (<option key={p.id} value={p.id}>{p.name}</option>))}</select><button type="button" onClick={() => beneficiary && handleBankruptcy(user.id, beneficiary)} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 mb-4 uppercase tracking-widest font-black">İflası Onayla</button><button type="button" onClick={() => setShowBankruptcyModal(false)} className="text-slate-500 font-bold uppercase text-xs tracking-widest hover:text-white font-bold">Vazgeç</button></div></div>
             )}
         </>
       ) : (
-        <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 shadow-2xl animate-in zoom-in-95 ring-1 ring-slate-700/30">
-          <div className="flex justify-between items-center mb-8 border-b border-slate-800 pb-4"><h3 className="text-white font-bold text-xl flex items-center gap-2 uppercase tracking-widest font-bold">{mode === 'pay_bank' ? <Landmark className="text-red-500"/> : <Users className="text-fuchsia-500"/>} {mode === 'pay_bank' ? 'Ödeme' : 'Para Gönder'}</h3><button type="button" onClick={() => setMode(null)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 p-2 rounded-full transition-colors"><XCircle size={20}/></button></div>
-          {mode === 'pay_player' && <div className="grid grid-cols-3 gap-3 mb-8">{players.filter(p => p.id !== user.id).map(p => (<button key={p.id} type="button" onClick={() => setTargetId(p.id)} className={`p-4 rounded-2xl border flex flex-col items-center gap-2 text-xs transition-all ${targetId === p.id ? 'bg-fuchsia-600 border-fuchsia-400 text-white shadow-lg scale-105' : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600'}`}><div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden">{(() => { const token = GAME_TOKENS.find(t => t.id === p.token); return token?.img ? <img src={token.img} alt="" className="w-full h-full object-cover" /> : token?.icon; })()}</div><span className="font-bold truncate w-full text-center tracking-tight uppercase font-bold">{p.name}</span></button>))}</div>}
-          <div className="bg-slate-950 p-6 rounded-3xl border border-slate-800 mb-6 shadow-inner"><label className="text-[10px] text-slate-600 font-bold ml-1 mb-2 block uppercase tracking-widest font-bold">Tutarı Yazınız</label><input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className="w-full bg-transparent text-5xl font-mono text-white text-center outline-none tracking-tighter font-mono" autoFocus /></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 shadow-2xl animate-in zoom-in-95 ring-1 ring-slate-700/30 shadow-inner">
+          <div className="flex justify-between items-center mb-8 border-b border-slate-800 pb-4"><h3 className="text-white font-bold text-xl flex items-center gap-2 uppercase tracking-widest font-bold">{mode === 'pay_bank' ? <Landmark className="text-red-500"/> : <Users className="text-fuchsia-500"/>} {mode === 'pay_bank' ? 'Banka Ödemesi' : 'Oyuncuya Gönder'}</h3><button type="button" onClick={() => setMode(null)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 p-2 rounded-full shadow-md"><XCircle size={20}/></button></div>
+          {mode === 'pay_player' && <div className="grid grid-cols-3 gap-3 mb-8">{players.filter(p => p.id !== user.id && !p.isBankerOnly).map(p => (<button key={p.id} type="button" onClick={() => setTargetId(p.id)} className={`p-4 rounded-2xl border flex flex-col items-center gap-2 text-xs transition-all shadow-md ${targetId === p.id ? 'bg-fuchsia-600 border-fuchsia-400 text-white shadow-lg scale-105' : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600'}`}><div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden">{(() => { const token = GAME_TOKENS.find(t => t.id === p.token); return token?.img ? <img src={token.img} alt="" className="w-full h-full object-cover" /> : token?.icon; })()}</div><span className="font-bold truncate w-full text-center tracking-tight uppercase font-bold">{p.name}</span></button>))}</div>}
+          <div className="bg-slate-950 p-6 rounded-3xl border border-slate-800 mb-6 shadow-inner"><label className="text-[10px] text-slate-600 font-bold ml-1 mb-2 block uppercase tracking-widest font-black">Tutarı Girin</label><input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className="w-full bg-transparent text-5xl font-mono text-white text-center outline-none tracking-tighter font-mono font-black" autoFocus /></div>
           <button type="button" onClick={handleSend} disabled={!amount || (mode === 'pay_player' && !targetId)} className="w-full py-5 bg-white text-slate-900 font-black text-xl rounded-2xl hover:bg-slate-100 disabled:opacity-50 shadow-xl transition-all active:scale-95 flex items-center justify-center gap-3 uppercase tracking-widest font-bold">Onayla <CheckCircle2 size={24} /></button>
         </div>
       )}
@@ -847,10 +883,10 @@ function FinancePanel({ user, players, currentTurn, handleSavings, calculateDebt
   const currentDebt = calculateDebt(user.debt, user.debtStartTurn, currentTurn);
 
   return (
-    <div className="animate-in fade-in space-y-6 pb-20 bg-slate-900 p-6 rounded-[2rem] border border-slate-800 shadow-2xl">
-      <div className="flex bg-slate-950 p-1 rounded-2xl border border-slate-800 shadow-inner"><button type="button" onClick={() => setActiveSubTab('loan')} className={`flex-1 py-3 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 ${activeSubTab === 'loan' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-600 font-bold'}`}><HandCoins size={16}/> BORÇLARIM</button><button type="button" onClick={() => setActiveSubTab('savings')} className={`flex-1 py-3 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 ${activeSubTab === 'savings' ? 'bg-amber-900/30 text-amber-500 shadow-md border border-amber-900/50' : 'text-slate-600 font-bold'}`}><PiggyBank size={16}/> VADELİ</button></div>
-      {activeSubTab === 'savings' && <div className="bg-gradient-to-br from-amber-950/40 to-slate-900 border border-amber-900/30 rounded-3xl p-6 shadow-xl"><div className="mb-6"><span className="text-amber-500 text-[10px] font-bold uppercase tracking-[0.3em] font-bold">Vadeli Birikim</span><div className="text-4xl font-mono text-white font-black mt-1 font-mono font-black">{user.savings.toLocaleString()} <span className="text-xl font-bold">TL</span></div></div>{user.savings > 0 ? <div className="bg-slate-950/60 rounded-2xl p-4 border border-slate-800"><div className="flex justify-between items-center mb-2"><span className="text-slate-500 text-[9px] font-bold uppercase font-bold">Durum</span><span className="text-white font-mono font-bold text-xs uppercase tracking-tighter font-mono">{turnsPassed} / {(Math.floor(turnsPassed / 5) + 1) * 5} Tur Beklendi</span></div><div className="w-full bg-slate-900 rounded-full h-2 mb-4 overflow-hidden border border-slate-800"><div className={`h-full rounded-full transition-all duration-1000 ${isMilestone ? 'bg-green-500 shadow-[0_0_15px_rgba(34,197,94,0.4)]' : 'bg-amber-500'}`} style={{ width: `${(turnsPassed % 5 === 0 && turnsPassed > 0 ? 100 : (turnsPassed % 5) * 20)}%` }}></div></div><div className="flex justify-between items-center"><span className={isMilestone ? "text-green-400 font-bold text-[10px] font-bold" : "text-slate-500 text-[10px] font-bold"}>{isMilestone ? "✅ KAZANÇ HAZIR" : "⌛ TUR BEKLENİYOR"}</span><span className={isMilestone ? "text-green-400 font-bold font-mono text-xs font-mono font-bold" : "text-slate-600 font-mono text-xs font-mono font-bold"}>+{interestAmount.toLocaleString()} TL (%{interestRate})</span></div></div> : <div className="text-slate-500 text-xs italic bg-slate-950/30 p-4 rounded-xl border border-slate-800/50 italic font-bold">💰 Paranızı vadeli hesaba yatırarak her 5 turda bir %10 kazanç sağlayabilirsiniz. Erken çekerseniz sadece ana paranızı alırsınız.</div>}<div className="mt-6 border-t border-slate-800 pt-6">{user.savings === 0 ? <div className="flex gap-2"><input type="number" value={savingsAmount} onChange={e => setSavingsAmount(e.target.value)} placeholder="0" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-4 font-mono text-white text-center outline-none focus:border-amber-500 shadow-inner font-mono" /><button type="button" onClick={() => { handleSavings(user.id, savingsAmount, 'DEPOSIT'); setSavingsAmount(''); }} className="bg-amber-600 text-white font-bold px-8 rounded-xl shadow-lg active:scale-95 transition-all text-xs tracking-widest uppercase font-bold">Yatır</button></div> : <button type="button" onClick={() => handleSavings(user.id, 0, 'WITHDRAW')} className={`w-full py-4 font-bold rounded-xl active:scale-95 transition-all flex flex-col items-center justify-center gap-1 shadow-lg ${isMilestone ? 'bg-green-600 text-white' : 'bg-slate-800 text-red-400 border border-red-900/20'}`}><span className="uppercase tracking-widest text-xs font-bold">{isMilestone ? 'Kazancı Çek' : 'Hesabı Kapat'}</span>{!isMilestone && <span className="text-[8px] opacity-60 font-bold font-bold">(Faiz Silinecektir!)</span>}</button>}</div></div>}
-      {activeSubTab === 'loan' && <><div className="bg-gradient-to-br from-red-950/20 to-slate-900 border border-red-900/20 rounded-3xl p-6 shadow-xl"><div className="mb-6"><span className="text-red-500 text-[10px] font-bold uppercase tracking-[0.3em] font-bold">Borç Bakiyesi</span><div className="text-4xl font-mono text-white font-black mt-1 font-mono font-black">{user.debt > 0 ? currentDebt.toLocaleString() : "0"} <span className="text-xl font-bold">TL</span></div></div>{user.debt > 0 ? <div className="relative z-10"><div className="bg-slate-950/60 rounded-2xl p-5 border border-red-900/10 mb-6 shadow-inner"><div className="flex justify-between text-xs mb-2 text-slate-400 uppercase tracking-tighter font-bold"><span>Ana Para</span><span className="font-mono text-white font-mono">{user.debt.toLocaleString()} TL</span></div><div className="flex justify-between text-xs mb-2 text-slate-400 uppercase tracking-tighter font-bold"><span>Geçen Süre</span><span className="font-mono text-white font-mono">{currentTurn - user.debtStartTurn} Tur</span></div><div className="flex justify-between text-xs text-red-500 font-bold border-t border-slate-800 pt-2 mt-2 uppercase tracking-widest font-bold"><span>Faiz Oranı</span><span className="font-mono font-mono">% {((currentTurn - user.debtStartTurn) >= 2) ? (currentTurn - user.debtStartTurn - 1) * 25 : 0}</span></div></div><button type="button" onClick={() => payDebt(user.id)} className="w-full py-4 bg-white text-red-900 font-black rounded-xl hover:bg-slate-100 active:scale-95 shadow-2xl tracking-[0.2em] uppercase text-xs font-bold">Borcu Kapat</button></div> : <div className="text-slate-500 text-xs italic bg-slate-950/30 p-4 rounded-xl border border-slate-800/50 font-bold italic">Şu an borcunuz bulunmuyor. Bankacıdan kredi alabilir veya arkadaşlarınıza borç verebilirsiniz.<br/><span className="text-red-500/60 mt-2 block font-bold text-[10px] uppercase font-bold">⚠️ 1. turdan sonra faiz oranı %25 olarak artar!</span></div>}</div><div className="bg-slate-950/50 border border-slate-800 rounded-3xl p-6 shadow-xl shadow-inner"><h4 className="text-white font-bold mb-4 flex items-center gap-2 text-[10px] uppercase tracking-[0.25em] font-bold tracking-widest"><ArrowRightLeft size={14} className="text-indigo-400"/> Borç Ver</h4><div className="flex flex-col gap-3"><select className="w-full bg-slate-900 border border-slate-800 rounded-xl p-4 text-white text-xs outline-none focus:border-indigo-500 font-bold uppercase" value={loanTarget} onChange={(e) => setLoanTarget(e.target.value)}><option value="">Oyuncu Seç</option>{players.filter(p => p.id !== user.id).map(p => (<option key={p.id} value={p.id}>{p.name}</option>))}</select><div className="flex gap-2"><input type="number" placeholder="0" value={loanAmount} onChange={(e) => setLoanAmount(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-xl p-4 text-white text-lg font-mono outline-none focus:border-indigo-500 shadow-inner font-mono" /><button type="button" onClick={() => { if(loanTarget && loanAmount) { handleLoan(user.id, parseInt(loanTarget), loanAmount); setLoanAmount(''); setLoanTarget(''); } }} disabled={!loanTarget || !loanAmount} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-8 rounded-xl shadow-lg active:scale-95 transition-all uppercase text-[10px] tracking-widest font-bold">Gönder</button></div></div></div></>}
+    <div className="animate-in fade-in space-y-6 pb-20 bg-slate-900 p-6 rounded-[2.5rem] border border-slate-800 shadow-2xl">
+      <div className="flex bg-slate-950 p-1 rounded-2xl border border-slate-800 shadow-inner font-black"><button type="button" onClick={() => setActiveSubTab('loan')} className={`flex-1 py-3 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 ${activeSubTab === 'loan' ? 'bg-slate-800 text-white shadow-md border border-slate-700' : 'text-slate-600'}`}><HandCoins size={16}/> BORÇLAR</button><button type="button" onClick={() => setActiveSubTab('savings')} className={`flex-1 py-3 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 ${activeSubTab === 'savings' ? 'bg-amber-900/30 text-amber-500 shadow-md border border-amber-900/50' : 'text-slate-600'}`}><PiggyBank size={16}/> VADELİ</button></div>
+      {activeSubTab === 'savings' && <div className="bg-gradient-to-br from-amber-950/40 to-slate-900 border border-amber-900/30 rounded-3xl p-6 shadow-xl"><div className="mb-6"><span className="text-amber-500 text-[10px] font-bold uppercase tracking-[0.3em] font-black">Vadeli Hesabım</span><div className="text-4xl font-mono text-white font-black mt-1 font-mono font-black">{user.savings.toLocaleString()} <span className="text-xl font-bold">TL</span></div></div>{user.savings > 0 ? <div className="bg-slate-950/60 rounded-2xl p-4 border border-slate-800 shadow-inner"><div className="flex justify-between items-center mb-2 font-black"><span className="text-slate-500 text-[9px] font-bold uppercase font-bold">Durum</span><span className="text-white font-mono font-bold text-xs uppercase tracking-tighter font-mono">{turnsPassed} / {(Math.floor(turnsPassed / 5) + 1) * 5} Tur Beklendi</span></div><div className="w-full bg-slate-900 rounded-full h-2 mb-4 overflow-hidden border border-slate-800"><div className={`h-full rounded-full transition-all duration-1000 ${isMilestone ? 'bg-green-500 shadow-[0_0_15px_rgba(34,197,94,0.4)]' : 'bg-amber-500'}`} style={{ width: `${(turnsPassed % 5 === 0 && turnsPassed > 0 ? 100 : (turnsPassed % 5) * 20)}%` }}></div></div><div className="flex justify-between items-center font-black"><span className={isMilestone ? "text-green-400 font-bold text-[10px] font-black" : "text-slate-500 text-[10px] font-black"}>{isMilestone ? "✅ KAZANÇ HAZIR" : "⌛ TUR BEKLENİYOR"}</span><span className={isMilestone ? "text-green-400 font-bold font-mono text-xs font-mono font-bold" : "text-slate-600 font-mono text-xs font-mono font-bold"}>+{interestAmount.toLocaleString()} TL (%{interestRate})</span></div></div> : <div className="text-slate-500 text-xs italic bg-slate-950/30 p-4 rounded-xl border border-slate-800/50 italic font-bold">Birikim yaparak her 5 turda bir %10 kazanç sağlayabilirsiniz. Erken çekerseniz sadece ana paranızı alırsınız.</div>}<div className="mt-6 border-t border-slate-800 pt-6">{user.savings === 0 ? <div className="flex gap-2"><input type="number" value={savingsAmount} onChange={e => setSavingsAmount(e.target.value)} placeholder="0" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-4 font-mono text-white text-center outline-none focus:border-amber-500 shadow-inner font-mono font-black" /><button type="button" onClick={() => { handleSavings(user.id, savingsAmount, 'DEPOSIT'); setSavingsAmount(''); }} className="bg-amber-600 text-white font-bold px-8 rounded-xl shadow-lg active:scale-95 transition-all text-xs tracking-widest uppercase font-black">Yatır</button></div> : <button type="button" onClick={() => handleSavings(user.id, 0, 'WITHDRAW')} className={`w-full py-4 font-bold rounded-xl active:scale-95 transition-all flex flex-col items-center justify-center gap-1 shadow-lg ${isMilestone ? 'bg-green-600 text-white shadow-xl' : 'bg-slate-800 text-red-400 border border-red-900/20'}`}><span className="uppercase tracking-widest text-xs font-black">{isMilestone ? 'Kârı Çek' : 'Hesabı Kapat'}</span>{!isMilestone && <span className="text-[8px] opacity-60 font-bold font-bold">(Faiz Silinecektir!)</span>}</button>}</div></div>}
+      {activeSubTab === 'loan' && <><div className="bg-gradient-to-br from-red-950/20 to-slate-900 border border-red-900/20 rounded-3xl p-6 shadow-xl"><div className="mb-6"><span className="text-red-500 text-[10px] font-bold uppercase tracking-[0.3em] font-black">Toplam Borç</span><div className="text-4xl font-mono text-white font-black mt-1 font-mono font-black font-black">{user.debt > 0 ? currentDebt.toLocaleString() : "0"} <span className="text-xl font-bold">TL</span></div></div>{user.debt > 0 ? <div className="relative z-10 font-black"><div className="bg-slate-950/60 rounded-2xl p-5 border border-red-900/10 mb-6 shadow-inner font-bold"><div className="flex justify-between text-xs mb-2 text-slate-400 uppercase tracking-tighter"><span>Ana Para</span><span className="font-mono text-white font-mono font-bold">{user.debt.toLocaleString()} TL</span></div><div className="flex justify-between text-xs mb-2 text-slate-400 uppercase tracking-tighter font-black"><span>Geçen Süre</span><span className="font-mono text-white font-mono font-bold">{currentTurn - user.debtStartTurn} Tur</span></div><div className="flex justify-between text-xs text-red-500 font-bold border-t border-slate-800 pt-2 mt-2 uppercase tracking-widest font-black"><span>Faiz Oranı</span><span className="font-mono font-mono font-bold">% {((currentTurn - user.debtStartTurn) >= 2) ? (currentTurn - user.debtStartTurn - 1) * 25 : 0}</span></div></div><button type="button" onClick={() => payDebt(user.id)} className="w-full py-4 bg-white text-red-900 font-black rounded-xl hover:bg-slate-100 active:scale-95 shadow-2xl tracking-[0.2em] uppercase text-xs font-bold font-black">Borcu Kapat</button></div> : <div className="text-slate-500 text-xs italic bg-slate-950/30 p-4 rounded-xl border border-slate-800/50 font-bold italic font-black">Aktif borcunuz bulunmuyor.<br/><span className="text-red-500/60 mt-2 block font-bold text-[10px] uppercase font-bold font-black">⚠️ 1. turdan sonra faiz oranı %25 olarak artar!</span></div>}</div><div className="bg-slate-950/50 border border-slate-800 rounded-3xl p-6 shadow-xl shadow-inner font-black font-black"><h4 className="text-white font-bold mb-4 flex items-center gap-2 text-[10px] uppercase tracking-[0.25em] font-black"><ArrowRightLeft size={14} className="text-indigo-400"/> Borç Ver</h4><div className="flex flex-col gap-3"><select className="w-full bg-slate-900 border border-slate-800 rounded-xl p-4 text-white text-xs outline-none focus:border-indigo-500 font-black uppercase font-black" value={loanTarget} onChange={(e) => setLoanTarget(e.target.value)}><option value="">Arkadaşını Seç</option>{players.filter(p => p.id !== user.id && !p.isBankerOnly).map(p => (<option key={p.id} value={p.id}>{p.name}</option>))}</select><div className="flex gap-2"><input type="number" placeholder="0" value={loanAmount} onChange={(e) => setLoanAmount(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-xl p-4 text-white text-lg font-mono outline-none focus:border-indigo-500 shadow-inner font-mono font-black font-black" /><button type="button" onClick={() => { if(loanTarget && loanAmount) { handleLoan(user.id, parseInt(loanTarget), loanAmount); setLoanAmount(''); setLoanTarget(''); } }} disabled={!loanTarget || !loanAmount} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-8 rounded-xl shadow-lg active:scale-95 transition-all uppercase text-[10px] tracking-widest font-black font-black">Borç Ver</button></div></div></div></>}
     </div>
   );
 }
@@ -860,20 +896,22 @@ function BankerControls({ players, onTransaction, handleSalary, handleLoan }) {
   const [amount, setAmount] = useState('');
   const [type, setType] = useState('GIVE'); 
   const [loanAmount, setLoanAmount] = useState('');
-  const execute = () => { if (!amount || !selectedPlayer) return; onTransaction(type === 'GIVE' ? 'BANKA' : selectedPlayer.id, type === 'GIVE' ? selectedPlayer.id : 'BANKA', amount, type === 'GIVE' ? 'ÖZEL_BONUS' : 'CEZA_VERGİ'); setAmount(''); setSelectedPlayer(null); };
+  const execute = () => { if (!amount || !selectedPlayer) return; onTransaction('BANKA', selectedPlayer.id, amount, type === 'GIVE' ? 'BANKACI_ÖDÜL' : 'CEZA_VERGİ'); setAmount(''); setSelectedPlayer(null); };
 
   return (
     <div className="animate-in fade-in pb-20">
-      <div className="flex items-center gap-3 mb-6 p-6 bg-gradient-to-r from-amber-600 to-orange-500 rounded-[2rem] shadow-xl text-white ring-2 ring-white/10"><div className="bg-white/20 p-3 rounded-2xl"><ShieldAlert size={32} /></div><div><h3 className="font-black text-xl leading-tight uppercase tracking-tighter font-black">Bankacı Paneli</h3><p className="text-[10px] text-white/70 uppercase font-bold tracking-[0.2em] font-bold">Oyun Yönetimi</p></div></div>
-      <div className="grid grid-cols-1 gap-4">{players.map(p => (<div key={p.id} className="bg-slate-900 border border-slate-800 p-5 rounded-3xl flex items-center justify-between hover:border-slate-600 transition-all shadow-lg ring-1 ring-slate-800"><div className="flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-slate-800 border-2 border-slate-700 flex items-center justify-center overflow-hidden shadow-inner">{(() => { const token = GAME_TOKENS.find(t => t.id === p.token); return token?.img ? <img src={token.img} alt="" className="w-full h-full object-cover"/> : token?.icon; })()}</div><div><div className="font-bold text-white flex items-center gap-2 text-base uppercase font-bold">{p.name}<span className="text-[8px] bg-slate-800 px-2 py-0.5 rounded-full text-teal-400 border border-slate-700 font-mono uppercase font-black tracking-widest font-mono font-black">T{p.turn}</span></div><div className="text-[10px] font-mono text-slate-500 flex items-center gap-1 mt-0.5 uppercase tracking-tighter italic font-mono font-bold"><EyeOff size={12} /> Bakiye Gizlendi</div></div></div><button type="button" onClick={() => setSelectedPlayer(p)} className="bg-slate-800 hover:bg-slate-700 text-[10px] px-6 py-3 rounded-xl text-white border border-slate-700 font-black uppercase tracking-widest transition-all active:scale-95 shadow-md font-black">Yönet</button></div>))}</div>
-      {selectedPlayer && <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex items-end sm:items-center justify-center p-4"><div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-[2.5rem] p-8 shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-y-auto max-h-[90vh]"><div className="text-center mb-8"><div className="inline-block w-24 h-24 bg-slate-800 rounded-full mb-4 border-4 border-slate-700 overflow-hidden shadow-2xl">{(() => { const token = GAME_TOKENS.find(t => t.id === selectedPlayer.token); return token?.img ? <img src={token.img} alt="" className="w-full h-full object-cover"/> : token?.icon; })()}</div><h3 className="text-3xl font-black text-white tracking-tighter uppercase font-black">{selectedPlayer.name}</h3><div className="flex items-center justify-center gap-2 mt-2"><span className="text-slate-500 text-[10px] font-bold uppercase tracking-widest font-bold">Durum:</span><span className="text-teal-500 font-mono font-bold text-xs uppercase bg-slate-800 px-3 py-1 rounded-full font-mono font-bold">Tur {selectedPlayer.turn}</span></div></div><button type="button" onClick={() => {handleSalary(selectedPlayer.id); setSelectedPlayer(null);}} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-black py-5 rounded-2xl mb-8 shadow-2xl active:scale-95 transition-all uppercase tracking-[0.15em] flex items-center justify-center gap-3 ring-1 ring-white/10 font-black"><Briefcase size={20} /> Maaş & Tur Atlat</button><div className="bg-slate-950/60 p-6 rounded-[2rem] border border-slate-800 mb-6 shadow-inner"><h4 className="text-[10px] font-black text-slate-500 mb-4 uppercase tracking-[0.2em] text-center font-bold tracking-widest font-black uppercase">Manuel İşlem</h4><div className="grid grid-cols-2 gap-3 mb-4"><button type="button" onClick={() => setType('GIVE')} className={`py-3 rounded-xl border text-[10px] font-black transition-all uppercase tracking-widest font-black ${type === 'GIVE' ? 'bg-teal-600 border-teal-400 text-white shadow-lg' : 'bg-slate-900 border-slate-800 text-slate-600'}`}>Para Ekle</button><button type="button" onClick={() => setType('TAKE')} className={`py-3 rounded-xl border text-[10px] font-black transition-all uppercase tracking-widest font-black ${type === 'TAKE' ? 'bg-red-600 border-red-400 text-white shadow-lg' : 'bg-slate-900 border-slate-800 text-slate-600'}`}>Para Çek</button></div><div className="flex gap-2"><input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-4 text-2xl font-mono text-white text-center outline-none focus:border-slate-600 shadow-inner font-mono font-bold" /><button type="button" onClick={execute} className="bg-white text-slate-900 font-black rounded-xl px-6 hover:bg-slate-100 uppercase text-[10px] shadow-lg transition-all active:scale-90 tracking-widest font-black">Ok</button></div></div><div className="bg-red-950/10 p-6 rounded-[2rem] border border-red-900/20 mb-4 shadow-inner"><h4 className="text-[10px] font-black text-red-500/60 mb-4 uppercase tracking-[0.2em] text-center font-bold tracking-widest font-black">Banka Kredisi Ver</h4><div className="flex gap-2"><input type="number" value={loanAmount} onChange={e => setLoanAmount(e.target.value)} placeholder="0" className="w-full bg-slate-900 border border-red-900/10 rounded-xl px-4 py-3 text-lg font-mono text-white text-center outline-none font-mono font-bold" /><button type="button" onClick={() => { if(loanAmount) { handleLoan('BANKA', selectedPlayer.id, loanAmount); setLoanAmount(''); setSelectedPlayer(null); } }} className="bg-red-600 hover:bg-red-500 text-white font-black px-6 rounded-xl text-[10px] uppercase shadow-lg transition-all active:scale-90 tracking-widest font-black">Kredi</button></div></div><button type="button" onClick={() => setSelectedPlayer(null)} className="w-full py-5 text-slate-500 text-xs font-black rounded-2xl mt-4 hover:text-white transition-all uppercase tracking-[0.4em] font-black">Kapat</button></div></div>}
+      <div className="flex items-center gap-3 mb-6 p-6 bg-gradient-to-r from-amber-600 to-orange-500 rounded-[2.5rem] shadow-xl text-white ring-2 ring-white/10 shadow-inner"><div className="bg-white/20 p-3 rounded-2xl"><ShieldAlert size={32} /></div><div><h3 className="font-black text-xl leading-tight uppercase tracking-tighter font-black">Bankacı Yönetimi</h3><p className="text-[10px] text-white/70 uppercase font-bold tracking-[0.2em] font-bold">Kontrol Sende</p></div></div>
+      <div className="grid grid-cols-1 gap-4 font-black">{players.filter(p => !p.isBankerOnly).map(p => (<div key={p.id} className="bg-slate-900 border border-slate-800 p-5 rounded-3xl flex items-center justify-between hover:border-slate-600 transition-all shadow-lg ring-1 ring-slate-800"><div className="flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-slate-800 border-2 border-slate-700 flex items-center justify-center overflow-hidden shadow-inner">{(() => { const token = GAME_TOKENS.find(t => t.id === p.token); return token?.img ? <img src={token.img} alt="" className="w-full h-full object-cover"/> : token?.icon; })()}</div><div><div className="font-bold text-white flex items-center gap-2 text-base uppercase font-bold">{p.name}<span className="text-[8px] bg-slate-800 px-2 py-0.5 rounded-full text-teal-400 border border-slate-700 font-mono uppercase font-black tracking-widest font-mono">T{p.turn}</span></div><div className="text-[10px] font-mono text-slate-500 flex items-center gap-1 mt-0.5 uppercase tracking-tighter italic font-black font-mono font-bold"><EyeOff size={12} /> Bakiye Gizli</div></div></div><button onClick={() => setSelectedPlayer(p)} className="bg-slate-800 hover:bg-slate-700 text-[10px] px-6 py-3 rounded-xl text-white border border-slate-700 font-black uppercase tracking-widest active:scale-95 shadow-md font-black">Yönet</button></div>))}</div>
+      {selectedPlayer && <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex items-end sm:items-center justify-center p-4"><div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh] shadow-inner"><div className="text-center mb-8"><div className="inline-block w-24 h-24 bg-slate-800 rounded-full mb-4 border-4 border-slate-700 overflow-hidden shadow-2xl">{(() => { const token = GAME_TOKENS.find(t => t.id === selectedPlayer.token); return token?.img ? <img src={token.img} alt="" className="w-full h-full object-cover"/> : token?.icon; })()}</div><h3 className="text-3xl font-black text-white tracking-tighter uppercase font-black">{selectedPlayer.name}</h3><div className="flex items-center justify-center gap-2 mt-2 font-black uppercase"><span className="text-slate-500 text-[10px] font-bold uppercase tracking-widest font-black">Durum:</span><span className="text-teal-500 font-mono font-bold text-xs uppercase bg-slate-800 px-3 py-1 rounded-full font-mono font-bold font-black">Tur {selectedPlayer.turn}</span></div></div><button type="button" onClick={() => {handleSalary(selectedPlayer.id); setSelectedPlayer(null);}} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-black py-5 rounded-2xl mb-8 shadow-2xl active:scale-95 transition-all uppercase tracking-[0.15em] flex items-center justify-center gap-3 ring-1 ring-white/10 font-black font-black"><Briefcase size={20} /> Maaş Öde & Tur Atlat</button><div className="bg-slate-950/60 p-6 rounded-[2rem] border border-slate-800 mb-6 shadow-inner"><h4 className="text-[10px] font-black text-slate-500 mb-4 uppercase tracking-[0.2em] text-center font-bold tracking-widest font-black uppercase font-black">Bakiye İşlemleri</h4><div className="grid grid-cols-2 gap-3 mb-4"><button type="button" onClick={() => setType('GIVE')} className={`py-3 rounded-xl border text-[10px] font-black transition-all uppercase tracking-widest font-black ${type === 'GIVE' ? 'bg-teal-600 border-teal-400 text-white shadow-lg' : 'bg-slate-900 border-slate-800 text-slate-600'}`}>Para Ekle</button><button type="button" onClick={() => setType('TAKE')} className={`py-3 rounded-xl border text-[10px] font-black transition-all uppercase tracking-widest font-black ${type === 'TAKE' ? 'bg-red-600 border-red-400 text-white shadow-lg' : 'bg-slate-900 border-slate-800 text-slate-600'}`}>Para Çek</button></div><div className="flex gap-2"><input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-4 text-2xl font-mono text-white text-center outline-none shadow-inner font-black font-mono font-bold" /><button onClick={execute} className="bg-white text-slate-900 font-black rounded-xl px-6 hover:bg-slate-100 uppercase text-[10px] shadow-lg active:scale-90 tracking-widest font-black font-black font-black">Ok</button></div></div><div className="bg-red-950/10 p-6 rounded-[2rem] border border-red-900/20 mb-4 shadow-inner"><h4 className="text-[10px] font-black text-red-500/60 mb-4 uppercase tracking-[0.2em] text-center font-bold tracking-widest font-black uppercase font-black font-black">Kredi İşlemi</h4><div className="flex gap-2"><input type="number" value={loanAmount} onChange={e => setLoanAmount(e.target.value)} placeholder="0" className="w-full bg-slate-900 border border-red-900/10 rounded-xl px-4 py-3 text-lg font-mono text-white text-center outline-none font-mono font-bold font-black" /><button type="button" onClick={() => { if(loanAmount) { handleLoan('BANKA', selectedPlayer.id, loanAmount); setLoanAmount(''); setSelectedPlayer(null); } }} className="bg-red-600 hover:bg-red-500 text-white font-black px-6 rounded-xl text-[10px] uppercase shadow-lg active:scale-90 tracking-widest font-black uppercase font-black font-black">Kredi</button></div></div><button type="button" onClick={() => setSelectedPlayer(null)} className="w-full py-5 text-slate-500 text-xs font-black rounded-2xl mt-4 hover:text-white transition-all uppercase tracking-[0.4em] font-black font-black">Paneli Kapat</button></div></div>}
     </div>
   );
 }
 
 function TransactionFeed({ transactions }) {
-  if (transactions.length === 0) return <div className="text-center text-slate-600 py-16 text-sm italic animate-pulse tracking-widest uppercase font-bold font-bold italic uppercase tracking-widest font-black">Henüz hareket yok...</div>;
+  if (transactions.length === 0) return <div className="text-center text-slate-600 py-16 text-sm italic animate-pulse tracking-widest uppercase font-bold font-bold italic uppercase tracking-widest font-black font-black">Henüz hareket yok...</div>;
   return (
-    <div className="space-y-4 pb-24 animate-in fade-in"><h3 className="text-[10px] text-slate-600 font-black uppercase tracking-[0.4em] pl-2 mb-6 font-bold font-black">İşlem Geçmişi</h3>{transactions.map(t => (<div key={t.id} className={`bg-slate-900/70 border border-slate-800 p-5 rounded-3xl flex items-center justify-between shadow-xl backdrop-blur-sm group transition-all hover:bg-slate-800 ${t.type.includes('İFLAS') ? 'border-red-900/30 bg-red-950/10' : ''}`}><div className="flex items-center gap-4"><div className={`p-3 rounded-2xl shadow-inner ${t.from.includes('BANKA') || t.from === 'SİSTEM' ? 'bg-teal-500/10 text-teal-500' : (t.type.includes('İFLAS') ? 'bg-red-500/10 text-red-500' : 'bg-fuchsia-500/10 text-fuchsia-500')}`}>{t.from.includes('BANKA') || t.from === 'SİSTEM' ? <Landmark size={20} /> : (t.type.includes('İFLAS') ? <Skull size={20}/> : <LayoutGrid size={20} />)}</div><div><div className="text-sm font-black text-white mb-0.5 group-hover:text-teal-400 transition-colors uppercase tracking-tighter font-black uppercase">{t.from} <span className="text-slate-600 mx-1 font-bold">➝</span> {t.to}</div><div className="text-[9px] text-slate-500 uppercase tracking-[0.2em] font-black font-black uppercase">{t.type} • {t.time}</div></div></div><div className={`font-mono font-black text-base font-mono font-black font-mono`}>{t.amount > 0 ? t.amount.toLocaleString() : ''} {t.amount > 0 && 'TL'}</div></div>))}</div>
+    <div className="space-y-4 pb-24 animate-in fade-in"><h3 className="text-[10px] text-slate-600 font-black uppercase tracking-[0.4em] pl-2 mb-6 font-bold font-black font-black">İşlem Geçmişi</h3>{transactions.map(t => (<div key={t.id} className={`bg-slate-900/70 border border-slate-800 p-5 rounded-3xl flex items-center justify-between shadow-xl backdrop-blur-sm group transition-all hover:bg-slate-800 ${t.type.includes('İFLAS') ? 'border-red-900/30 bg-red-950/10' : ''} shadow-inner`}><div className="flex items-center gap-4"><div className={`p-3 rounded-2xl shadow-inner ${t.from.includes('BANKA') || t.from === 'SİSTEM' ? 'bg-teal-500/10 text-teal-500' : (t.type.includes('İFLAS') ? 'bg-red-500/10 text-red-500' : 'bg-fuchsia-500/10 text-fuchsia-500')}`}>{t.from.includes('BANKA') || t.from === 'SİSTEM' ? <Landmark size={20} /> : (t.type.includes('İFLAS') ? <Skull size={20}/> : <LayoutGrid size={20} />)}</div><div><div className="text-sm font-black text-white mb-0.5 group-hover:text-teal-400 transition-colors uppercase tracking-tighter font-black uppercase font-black">{t.from} <span className="text-slate-600 mx-1 font-bold">➝</span> {t.to}</div><div className="text-[9px] text-slate-500 uppercase tracking-[0.2em] font-black font-black uppercase font-black">{t.type} • {t.time}</div></div></div><div className={`font-mono font-black text-base font-mono font-black font-mono font-black`}>{t.amount > 0 ? t.amount.toLocaleString() : ''} {t.amount > 0 && 'TL'}</div></div>))}</div>
   );
 }
+
+const getCurrentTime = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });git add .
