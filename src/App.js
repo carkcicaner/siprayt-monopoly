@@ -520,7 +520,7 @@ export default function App() {
   };
 
   const resetGame = () => {
-    if (confirm('Oyun sıfırlanacak. Emin misin?')) {
+    if (window.confirm('Oyun sıfırlanacak. Emin misin?')) {
       localStorage.removeItem('monopoly_state_v13');
       setGameState({
         code: '',
